@@ -3,23 +3,21 @@ import sys
 import time
 import json
 import signal
+import random
+import sqlite3
 import argparse
 import inquirer
 import asyncio
 import aiohttp
 import requests
 from tqdm import tqdm
-from concurrent.futures import ProcessPoolExecutor
-from modules.db import create_tables, insert_proxy, insert_usernames, insert_passwords, generate_combos
-from modules.printer import print_error, print_success, print_warning, print_process, Fore
+# import JkProxyGetter as PXY
 from colorama import Fore, Style
-# from modules.proxies import check_proxy, get_proxies, working_proxies
-# import modules.proxies as px
-#from modules.api import get_usernames, get_passwords, send_http_requests, request_web_combos
+from concurrent.futures import ProcessPoolExecutor
 
 # Constantes
 MAX_RETRIES = 2
-REQUEST_TIMEOUT = 3
+REQUEST_TIMEOUT = 1
 REQUEST_TIMEOUT_CHECK_PROXY = 5
 DATABASE_PATH = None
 NEW_URL = False
@@ -58,10 +56,19 @@ def check_proxy(proxy):
     try:
         response = requests.get('https://www.google.com', proxies={'http': proxy, 'https': proxy}, timeout=REQUEST_TIMEOUT_CHECK_PROXY)
         if response.status_code == 200:
-            insert_proxy(conn=conn, proxy=proxy)
             return proxy
-    except Exception as e:
-        pass
+    except requests.RequestException as e:
+        print_error(f"Error al verificar el proxy {proxy} con HTTPS: {e}")
+        
+        try:
+            response = requests.get('http://www.google.com', proxies={'http': proxy, 'https': proxy}, timeout=REQUEST_TIMEOUT_CHECK_PROXY)
+            if response.status_code == 200:
+                return proxy
+        except requests.RequestException as e:
+            print_error(f"Error al verificar el proxy {proxy} con HTTP: {e}")
+
+    return None
+
 def insert_proxy(conn, proxy):
     try:
         cursor = conn.cursor()
@@ -75,7 +82,7 @@ def insert_proxy(conn, proxy):
 
 def signal_handler(sig, frame):
     time.sleep(2)
-    print(f"{Fore.YELLOW}\nCtrl+C presionado. Cancelando la ejecución...\n{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}Ctrl+C presionado. Cancelando la ejecución...{Style.RESET_ALL}")
     sys.exit(0)
 
 def load_config():
@@ -231,24 +238,24 @@ def load_http_proxies():
 
 def get_proxies():
     proxy_urls = config["proxy_sources"]
+    print("OLD PROXIES")
+    print(proxy_urls)
     proxies = []
-
+    proxy_urls = ['https://raw.githubusercontent.com/j0rd1s3rr4n0/api/main/proxy/http.txt']
     # Añadir proxies de http_proxies.txt
     # proxies.extend(load_http_proxies())
-    proxy_urls=["https://j0rd1s3rr4n0.github.io/api/proxy/http.txt"] # esta parte es una de testing
     try:
         for url in proxy_urls:
-            print(f"URL : {url}")
             try:
                 response = requests.get(url, timeout=REQUEST_TIMEOUT)
-                print(response.text.splitlines())
-                proxies.extend(response.text.splitlines())
+                proxies.extend(response.text.split('\r\n'))
             except Exception as e:
-                print(f"ERROR : {e}")
                 pass
     except KeyboardInterrupt:
+        time.sleep(2)
         print(f"{Fore.YELLOW}Ctrl+C presionado. Cancelando la ejecución...{Style.RESET_ALL}")
     return proxies
+
 def working_proxies():
     try:
         print(f"{Fore.CYAN}Searching and Checking proxies...{Style.RESET_ALL}")
@@ -312,13 +319,11 @@ def main():
     global MAX_WORKERS
     MAX_WORKERS = get_max_workers()
     try:
-        # PXY.start()
-        
         print_success(f' Added new Proxys')
-        global config, conn, DATABASE_PATH, USER_API_URL, PASS_API_URL
+        global config, conn
         print_process("CARGANDO AJUSTES")
         config = load_config()
-        
+
         DATABASE_PATH = config["database"]["DATABASE_PATH"]
         USER_API_URL = config["urls"]["user_api"]
         PASS_API_URL = config["urls"]["pass_api"]
@@ -327,7 +332,9 @@ def main():
             create_tables(conn, config)
             print_process("Calentano Motores... (Preparando Hilos)")
             with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                proxies = list(tqdm(executor.map(check_proxy, get_proxies()), total=len(get_proxies()), desc="Searching and Checking proxies", unit=" proxies"))
+                proxy_check_args = ((proxy, conn) for proxy in get_proxies())
+                proxies = list(tqdm(executor.map(check_proxy, proxy_check_args), total=len(get_proxies()), desc="Searching and Checking proxies", unit=" proxies"))
+                print(proxies)
             
             working_proxies_list = [proxy for proxy in proxies if proxy is not None]
             print_success(f'Encontrados {len(working_proxies_list)} proxies funcionando.')
